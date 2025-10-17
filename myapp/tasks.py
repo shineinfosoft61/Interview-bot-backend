@@ -4,10 +4,11 @@ from .models import QuestionAnswer, Question
 import re
 from celery import shared_task
 from openai import OpenAI
+from django.conf import settings
 
 client = OpenAI(
-                base_url="https://openrouter.ai/api/v1",
-                api_key="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",
+                base_url=settings.OPENROUTER_BASE_URL,
+                api_key=settings.OPENROUTER_API_KEY,
             )
 
 @shared_task
