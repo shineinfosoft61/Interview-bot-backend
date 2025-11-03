@@ -63,11 +63,24 @@ class HrModels(models.Model):
     time = models.DateTimeField(blank=True, null=True)
     interview_status = models.CharField(max_length=50, choices=INTERVIEW_CHOICES, blank=True, null=True, default="Pending")
     interview_closed = models.BooleanField(default=False)
+    photo = models.ImageField(upload_to='photos/', null=True, blank=True)
+    experience = models.CharField(max_length=50, null=True, blank=True)
+    tab_count = models.IntegerField(default=0)
+    photos = models.ManyToManyField('Photo', related_name='hr_records', blank=True)
+    emotion_summary = models.JSONField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return f"{self.name} ({self.email})"
+
+class Photo(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    image = models.ImageField(upload_to='photos/')
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Photo {self.id}"
 
 
 class QuestionAnswer(models.Model):

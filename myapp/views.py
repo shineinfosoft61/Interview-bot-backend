@@ -1,11 +1,16 @@
 import random
 import re
 import json
+import time
+# from fer import FER
+# import cv2
+# import numpy as np
+# import requests
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from .models import Question, HrModels
-from .serializers import AnswerSerializer, CandidateSerializer, QuestionSerializer, HrSerializer
+from .serializers import AnswerSerializer, CandidateSerializer, QuestionSerializer, HrSerializer, PhotoSerializer
 import base64
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -17,6 +22,7 @@ from PyPDF2 import PdfReader
 from django.conf import settings
 from django.urls import reverse
 from django.core.mail import send_mail
+from django.core.exceptions import ValidationError
 
 
 client = OpenAI(
@@ -66,15 +72,6 @@ class CandidateCreateView(APIView):
 
 class AnswerSaveView(APIView):
     def post(self, request):
-        serializer = AnswerSerializer(data = request.data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-
-class AnswerSaveView(APIView):
-    def post(self, request):
         serializer = AnswerSerializer(data=request.data)
         if serializer.is_valid():
             answer = serializer.save()
@@ -92,10 +89,21 @@ class AnswerSaveView(APIView):
 
 
 class hrView(APIView):
-    def get(self,request):
-        hr_objects = HrModels.objects.all().order_by('-created_at')
-        serializer = HrSerializer(hr_objects, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def get(self,request, pk=None):
+        if pk:
+            try:
+                hr_objects = HrModels.objects.get(pk=pk)
+            except (ValueError, ValidationError):
+                return Response({"error": "Invalid id format. Must be a UUID."}, status=status.HTTP_400_BAD_REQUEST)
+            except HrModels.DoesNotExist:
+                return Response({"error": "HR record not found."}, status=status.HTTP_404_NOT_FOUND)
+            serializer = HrSerializer(hr_objects)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        else:
+            hr_objects = HrModels.objects.all().order_by('-created_at')
+            serializer = HrSerializer(hr_objects, many=True)
+            return Response(serializer.data, status=status.HTTP_200_OK)
 
 
     def post(self, request):
@@ -114,6 +122,9 @@ class hrView(APIView):
             except Exception as e:
                 return Response({"error": f"Failed to read resume: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
 
+            if not text.strip():
+                return Response({"error": "Could not extract any readable text from the uploaded PDF."}, status=status.HTTP_400_BAD_REQUEST)
+
             prompt = f"""
                     Extract the following fields from this resume text: 
                     - name
@@ -125,21 +136,61 @@ class hrView(APIView):
                     {text}
                 """
 
-            try:
-                completion = client.chat.completions.create(
-                    model="alibaba/tongyi-deepresearch-30b-a3b:free",
-                    messages=[{"role": "user", "content": prompt}]
-                )
-                result_text = completion.choices[0].message.content
-                print('--------------result_text------------', result_text)
-            except Exception as e:
-                return Response({"error": f"LLM extraction failed: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            # Try LLM with simple retries
+            result_text = None
+            last_error = None
+            for attempt in range(3):
+                try:
+                    completion = client.chat.completions.create(
+                        model="alibaba/tongyi-deepresearch-30b-a3b:free",
+                        messages=[{"role": "user", "content": prompt}]
+                    )
+                    result_text = completion.choices[0].message.content
+                    break
+                except Exception as e:
+                    last_error = e
+                    # brief backoff before retrying on transient provider issues
+                    time.sleep(1.0)
 
-            try:
-                clean_text = re.sub(r"```json|```", "", result_text).strip()
-                data = json.loads(clean_text)
-            except Exception as e:
-                return Response({"error": f"Failed to parse extracted data: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            data = None
+            if result_text:
+                try:
+                    clean_text = re.sub(r"```json|```", "", result_text).strip()
+                    data = json.loads(clean_text)
+                except Exception as e:
+                    # fall back to heuristic parsing if LLM output is malformed
+                    last_error = e
+
+            fallback_used = False
+            if not data:
+                # Heuristic fallback extraction
+                fallback_used = True
+                lowered = text.lower()
+                # email
+                email_match = re.search(r"[\w\.-]+@[\w\.-]+\.[a-zA-Z]{2,}", text)
+                # phone (very permissive)
+                phone_match = re.search(r"(\+?\d[\d\s\-\(\)]{7,}\d)", text)
+                # name: first non-empty line that is not an email/phone header-like
+                first_line = next((ln.strip() for ln in text.splitlines() if ln and len(ln.strip()) > 1), "")
+                # technology from a small keyword set
+                tech_map = ["python", ".net", "java", "react"]
+                tech = next((t for t in tech_map if t in lowered), "")
+                data = {
+                    "name": first_line[:100],
+                    "email": email_match.group(0) if email_match else "",
+                    "phone": phone_match.group(0) if phone_match else "",
+                    "technology": tech,
+                }
+                if not any([data.get("name"), data.get("email"), data.get("phone"), data.get("technology")]):
+                    # If even fallback got nothing useful, respond gracefully with 503 if provider failed, else 422
+                    status_code = status.HTTP_503_SERVICE_UNAVAILABLE if last_error else status.HTTP_422_UNPROCESSABLE_ENTITY
+                    return Response(
+                        {
+                            "error": "Could not extract fields from resume.",
+                            "details": str(last_error) if last_error else "",
+                        },
+                        status=status_code,
+                    )
 
             hr_obj = HrModels.objects.create(
                 upload_doc=file,
@@ -152,10 +203,10 @@ class hrView(APIView):
             hr_obj.shine_link = f"{frontend_base}/{hr_obj.id}/"
             hr_obj.save(update_fields=['shine_link'])
             created_records.append(hr_obj)
-            
+
 
         serializer = HrSerializer(created_records, many=True)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response({"records": serializer.data}, status=status.HTTP_201_CREATED)
 
 
     def put(self, request, pk):
@@ -207,4 +258,26 @@ class hrView(APIView):
             serializer.save()
             return Response(serializer.data, status=status.HTTP_200_OK)
 
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class PhotoView(APIView):
+    def get(self, request, pk):
+        try:
+            hr_obj = HrModels.objects.get(pk=pk)
+        except HrModels.DoesNotExist:
+            return Response({"error": "HrModels not found"}, status=status.HTTP_404_NOT_FOUND)
+        serializer = PhotoSerializer(hr_obj.photos.all(), many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def post(self, request, pk):
+        try:
+            hr_obj = HrModels.objects.get(pk=pk)
+        except HrModels.DoesNotExist:
+            return Response({"error": "HrModels not found"}, status=status.HTTP_404_NOT_FOUND)
+        serializer = PhotoSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            hr_obj.photos.add(serializer.instance)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

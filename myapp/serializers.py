@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Candidate, Question, QuestionAnswer, HrModels
+from .models import Candidate, Question, QuestionAnswer, HrModels, Photo
 
 class QuestionSerializer(serializers.ModelSerializer):
     class Meta:
@@ -17,9 +17,20 @@ class AnswerSerializer(serializers.ModelSerializer):
         model = QuestionAnswer
         fields = '__all__'
 
+class AnswerHrSerializer(serializers.ModelSerializer):
+    question = QuestionSerializer()
+    class Meta:
+        model = QuestionAnswer
+        fields = '__all__'
+
+class PhotoSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Photo
+        fields = '__all__'
 
 class HrSerializer(serializers.ModelSerializer):
-    answers = AnswerSerializer(many=True, read_only=True)
+    answers = AnswerHrSerializer(many=True, read_only=True)
+    photos = PhotoSerializer(many=True, read_only=True)
     class Meta:
         model = HrModels
         fields = '__all__'
