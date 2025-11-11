@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import AnswerSaveView, QuestionListAPIView, CandidateCreateView, hrView, PhotoView
+from .views import AnswerSaveView, QuestionListAPIView, CandidateCreateView, hrView, PhotoView, RequirementView, InstagramDownloadView
 
 
 urlpatterns = [
@@ -10,5 +10,7 @@ urlpatterns = [
     path('hr/', hrView.as_view(), name="hr"),
     path('hr/<uuid:pk>/', hrView.as_view(), name="hr"),
     path('photo/<uuid:pk>/', PhotoView.as_view(), name="photo"),
-
+    path('requirement/', RequirementView.as_view(), name="requirement"),
+    path('requirement/<uuid:pk>/', RequirementView.as_view(), name="requirement"),
+    path('instagram-download/', InstagramDownloadView.as_view(), name="instagram-download"),
 ]

@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Candidate, Question, QuestionAnswer, HrModels, Photo
+from .models import Candidate, Question, QuestionAnswer, HrModels, Photo, Requirement
 
 class QuestionSerializer(serializers.ModelSerializer):
     class Meta:
@@ -34,3 +34,13 @@ class HrSerializer(serializers.ModelSerializer):
     class Meta:
         model = HrModels
         fields = '__all__'
+
+
+class RequirementSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Requirement
+        fields = '__all__'
+
+
+class InstagramDownloadSerializer(serializers.Serializer):
+    url = serializers.URLField(required=True)
