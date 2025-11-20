@@ -1,11 +1,28 @@
 from rest_framework import serializers
-from .models import Candidate, Question, QuestionAnswer, HrModels, Photo, Requirement
+from .models import Candidate, Question, QuestionAnswer, HrModels, Photo, Requirement, User
 
+
+class RegisterSerializer(serializers.ModelSerializer):
+
+    class Meta:
+        model = User
+        fields = ['id','username','email','password','role']
+    
+    def create(self, validated_data):
+        password = validated_data.pop('password')
+        user = super().create(validated_data)
+        user.set_password(password)
+        user.save()
+        return user
+    
+class LoginSerializer(serializers.Serializer):
+    email = serializers.CharField()
+    password = serializers.CharField()
+    
 class QuestionSerializer(serializers.ModelSerializer):
     class Meta:
         model = Question
         fields = '__all__'
-
 
 class CandidateSerializer(serializers.ModelSerializer):
     class Meta:
@@ -35,12 +52,10 @@ class HrSerializer(serializers.ModelSerializer):
         model = HrModels
         fields = '__all__'
 
-
 class RequirementSerializer(serializers.ModelSerializer):
     class Meta:
         model = Requirement
         fields = '__all__'
-
 
 class InstagramDownloadSerializer(serializers.Serializer):
     url = serializers.URLField(required=True)

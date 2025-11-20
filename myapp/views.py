@@ -2,16 +2,13 @@ import random
 import re
 import json
 import time
-# from fer import FER
-# import cv2
-# import numpy as np
-# import requests
+
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from .models import Question, HrModels, Requirement, QuestionAnswer
-from .serializers import AnswerSerializer, CandidateSerializer, QuestionSerializer, HrSerializer, PhotoSerializer, RequirementSerializer
-import base64
+from .models import Question, HrModels, Requirement, QuestionAnswer, User
+from .serializers import AnswerSerializer, CandidateSerializer, QuestionSerializer, HrSerializer, PhotoSerializer, RequirementSerializer, RegisterSerializer, LoginSerializer
+from .utils import analyze_facial_expressions
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -20,7 +17,6 @@ from .tasks import rate_answer
 from openai import OpenAI
 from PyPDF2 import PdfReader
 from django.conf import settings
-from django.urls import reverse
 from django.core.mail import send_mail
 from django.core.exceptions import ValidationError
 from io import BytesIO
@@ -28,6 +24,10 @@ import tempfile
 import os
 import docx
 import google.generativeai as genai
+from django.contrib.auth import authenticate, login as auth_login
+from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework.permissions import IsAuthenticated
+
 
 client = OpenAI(
                 base_url=settings.OPENROUTER_BASE_URL,
@@ -35,14 +35,100 @@ client = OpenAI(
             )
 genai.configure(api_key="AIzaSyCkS_laQWhLDMbfLTR94YK50c85AikXk5I")
 
-class QuestionListAPIView(APIView): 
+
+class RegisterView(APIView):
+    serializer_class = RegisterSerializer
+
     def get(self, request):
-        questions = list(Question.objects.all())
-        if not questions:
-            return Response({"message": "No questions available."}, status=404)
-        question = random.choice(questions)  # random select
-        serializer = QuestionSerializer(question)
+        users = User.objects.all()
+        serializer = RegisterSerializer(users, many=True)
         return Response(serializer.data)
+    
+    def post(self, request):
+        data = request.data
+        try:
+            User.objects.get(username=data['username'])
+            return Response({"status": "error", "message": f"User with this username address already exists."}, status=400)
+        except:
+            serializer = self.serializer_class(data=data)
+            if serializer.is_valid():
+                serializer.save()
+                return Response({"status": "success", "message": "User created successfully!","data":serializer.data}, status=200)
+            
+            return Response(serializer.errors, status=400)
+        
+    def put(self, request, pk=None):
+        data = request.data
+        try:
+            user_obj = User.objects.get(id=pk)
+        except User.DoesNotExist:
+            return Response({"status": "error", "message": f"User Does not exist with ID: {pk}"}, status=400)
+        
+        serializer = RegisterSerializer(user_obj, data=data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response({"status": "success", "message": "Profile updated successfully!"}, status=200)
+        return Response(serializer.errors, status=400)
+
+    
+class LoginView(APIView):
+    serializer_class = LoginSerializer
+    
+    def post(self, request):
+        data = request.data
+        serializer = self.serializer_class(data=data)
+        if serializer.is_valid():
+            email = serializer.validated_data.get('email')
+            password = serializer.validated_data.get('password')
+            
+            try:
+                user_obj = User.objects.get(email=email)
+                if not user_obj.is_active:
+                    return Response({"status": "error", "message": "Your account has been disabled!"}, status=status.HTTP_400_BAD_REQUEST)
+            except User.DoesNotExist:
+                return Response({"status": "error", "message": "The email provided is invalid."}, status=status.HTTP_400_BAD_REQUEST)
+            
+            user = authenticate(email=email, password=password)
+            if user is not None:
+                auth_login(request, user)
+                refresh = RefreshToken.for_user(user)
+                
+                response = {
+                    'refresh': str(refresh),
+                    'access': str(refresh.access_token),
+                    'user': {
+                        'id': user.id,
+                        'name': user.name,
+                        'email': user.email,
+                        'role': user.role,
+                        'is_staff': user.is_staff,
+                        }
+                }
+                return Response(response, status=status.HTTP_200_OK)
+            return Response({"status": "error", "message": "The password provided is invalid."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class QuestionListAPIView(APIView):
+    def get(self, request, pk=None):
+        if pk:
+            try:
+                hr = HrModels.objects.get(pk=pk)
+            except HrModels.DoesNotExist:
+                return Response({"error": "HR not found."}, status=status.HTTP_404_NOT_FOUND)
+            question = Question.objects.filter(hr=hr)
+            if question:
+                serializer = QuestionSerializer(question, many=True)
+                return Response(serializer.data)
+            else:
+                questions = list(Question.objects.all().exclude(hr=hr))
+                if not questions:
+                    return Response({"message": "No questions available."}, status=404)
+                random_questions = random.sample(questions, min(len(questions), 10))
+
+                serializer = QuestionSerializer(random_questions, many=True)
+                return Response(serializer.data)
+        return Response({"error": "HR not found."}, status=status.HTTP_404_NOT_FOUND)
 
     def post(self, request):
         file = request.FILES.get('file')
@@ -63,7 +149,6 @@ class QuestionListAPIView(APIView):
                         text += page.extract_text() + "\n"
                     questions = re.split(r'\n\s*\d+[\).]|\n*Q\d+[\).]?', text)
                     questions = [q.strip() for q in questions if len(q.strip()) > 5]
-                    print('-------------', questions)
                 else:
                     return Response({"error": "Unsupported file type. Please upload .txt or .pdf"}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -136,9 +221,8 @@ class AnswerSaveView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
-
 class hrView(APIView):
-
+    permission_classes = [IsAuthenticated]
     def get(self,request, pk=None):
         if pk:
             try:
@@ -153,7 +237,6 @@ class hrView(APIView):
             hr_objects = HrModels.objects.all().order_by('-created_at')
             serializer = HrSerializer(hr_objects, many=True)
             return Response(serializer.data, status=status.HTTP_200_OK)
-
 
     def post(self, request):
         files = request.FILES.getlist('upload_doc')
@@ -192,16 +275,26 @@ class hrView(APIView):
             last_error = None
             for attempt in range(3):
                 try:
-                    completion = client.chat.completions.create(
-                        model="alibaba/tongyi-deepresearch-30b-a3b:free",
-                        messages=[{"role": "user", "content": prompt}]
+                    # Create the model instance
+                    model = genai.GenerativeModel("models/gemini-2.5-flash")
+                    # Generate content
+                    response = model.generate_content(
+                        prompt,
+                        generation_config=genai.types.GenerationConfig(
+                            temperature=0.1,
+                            response_mime_type="application/json",  # or "text/plain" if you want plain text
+                        ),
                     )
-                    result_text = completion.choices[0].message.content
-                    break
+                    # Extract text safely
+                    result_text = getattr(response, "text", None)
+                    if result_text:
+                        result_text = result_text.strip()
+                    break  # exit loop on success
+
                 except Exception as e:
                     last_error = e
-                    # brief backoff before retrying on transient provider issues
-                    time.sleep(1.0)
+                    print(f"Attempt {attempt+1} failed: {e}")
+                    time.sleep(1.0)  # backoff before retrying
 
             data = None
             if result_text:
@@ -244,7 +337,7 @@ class hrView(APIView):
                         "error": "Email already exists.",
                         "details": "Email already exists.",
                     },
-                    status=status.HTTP_400_BAD_REQUEST,
+                    status=400,
                 )
 
             hr_obj = HrModels.objects.create(
@@ -264,7 +357,6 @@ class hrView(APIView):
 
         serializer = HrSerializer(created_records, many=True)
         return Response({"records": serializer.data}, status=status.HTTP_201_CREATED)
-
 
     def put(self, request, pk):
         try:
@@ -313,54 +405,56 @@ class hrView(APIView):
                 return Response(serializer.data, status=status.HTTP_200_OK)
             if interview_status == "Completed":
                 answers = list(QuestionAnswer.objects.filter(hr=hr_obj).values_list("answer_text", flat=True))
-            if not answers:
-                return None
+                if not answers:
+                    return None
 
-            prompt = (
-                "Evaluate the candidate's communication skills based on the provided answers.\n"
-                "Return ONLY a valid JSON object named communication_point containing:\n"
-                "- Grammar: integer score (0-10)\n"
-                "- ProfessionalLanguage: integer score (0-10)\n"
-                "- OverallGrammarExplanation: short paragraph explaining the grammar score.\n"
-                "- OverallProfessionalLanguageExplanation: short paragraph explaining the professional language score.\n"
-                "- OverallLanguageUsed: describe which language(s) the candidate used (e.g., English, Hindi, mixed).\n\n"
-                "Example format:\n"
-                "{\n"
-                '  "communication_point": {\n'
-                '    "Grammar": 8,\n'
-                '    "ProfessionalLanguage": 7,\n'
-                '    "OverallGrammarExplanation": "Grammar was mostly correct, with few minor sentence structure issues.",\n'
-                '    "OverallProfessionalLanguageExplanation": "The candidate used formal language but with occasional informal phrases.",\n'
-                '    "OverallLanguageUsed": "English"\n'
-                "  }\n"
-                "}\n\n"
-                f"Answers: {json.dumps(answers)}"
-            )
-
-            try:
-                model = genai.GenerativeModel("models/gemini-2.5-flash")
-
-                # Generate JSON response
-                response = model.generate_content(
-                    prompt,
-                    generation_config=genai.types.GenerationConfig(
-                        temperature=0.1,
-                        response_mime_type="application/json",
-                    ),
+                prompt = (
+                    "Evaluate the candidate's communication skills based on the provided answers.\n"
+                    "Return ONLY a valid JSON object named communication_point containing:\n"
+                    "- Grammar: integer score (0-10)\n"
+                    "- ProfessionalLanguage: integer score (0-10)\n"
+                    "- OverallGrammarExplanation: short paragraph explaining the grammar score.\n"
+                    "- OverallProfessionalLanguageExplanation: short paragraph explaining the professional language score.\n"
+                    "- OverallLanguageUsed: describe which language(s) the candidate used (e.g., English, Hindi, mixed).\n\n"
+                    "Example format:\n"
+                    "{\n"
+                    '  "communication_point": {\n'
+                    '    "Grammar": 8,\n'
+                    '    "ProfessionalLanguage": 7,\n'
+                    '    "OverallGrammarExplanation": "Grammar was mostly correct, with few minor sentence structure issues.",\n'
+                    '    "OverallProfessionalLanguageExplanation": "The candidate used formal language but with occasional informal phrases.",\n'
+                    '    "OverallLanguageUsed": "English"\n'
+                    "  }\n"
+                    "}\n\n"
+                    f"Answers: {json.dumps(answers)}"
                 )
-                result_text = response.text.strip()
-            except Exception as e:
-                print("error", e)
-                result_text = None
 
-            if not result_text:
-                return None
+                try:
+                    model = genai.GenerativeModel("models/gemini-2.5-flash")
 
-            result_json = json.loads(result_text)
-            if "communication_point" in result_json:
-                result_json = result_json["communication_point"]
-                hr_obj.communication = result_json
-                hr_obj.save(update_fields=["communication"])
+                    # Generate JSON response
+                    response = model.generate_content(
+                        prompt,
+                        generation_config=genai.types.GenerationConfig(
+                            temperature=0.1,
+                            response_mime_type="application/json",
+                        ),
+                    )
+                    result_text = response.text.strip()
+                except Exception as e:
+                    print("error", e)
+                    result_text = None
+
+                if not result_text:
+                    return None
+
+                result_json = json.loads(result_text)
+                if "communication_point" in result_json:
+                    result_json = result_json["communication_point"]
+                    hr_obj.communication = result_json
+                    hr_obj.save(update_fields=["communication"])
+                
+                facial = analyze_facial_expressions(hr_obj)
 
             serializer.save()
             return Response(serializer.data, status=status.HTTP_200_OK)
@@ -391,6 +485,7 @@ class PhotoView(APIView):
 
 
 class RequirementView(APIView):
+    permission_classes = [IsAuthenticated]
     def get(self, request):
         requirement_objects = Requirement.objects.all().order_by('-created_at')
         serializer = RequirementSerializer(requirement_objects, many=True)
@@ -447,7 +542,7 @@ class RequirementView(APIView):
                 "name": "Senior Python Developer",
                 "experience": "2-5 years",
                 "technology": "Python",
-                "No_of_openings": 3,
+                "No_of_openings": 3,    
                 "notice_period": 30,
                 "priority": true
             }
@@ -456,18 +551,18 @@ class RequirementView(APIView):
             """ + text
 
             # Call OpenAI API
-            completion = client.chat.completions.create(
-                model="alibaba/tongyi-deepresearch-30b-a3b:free",
-                messages=[
-                    {"role": "system", "content": "You are a helpful assistant that extracts structured data from job requirements."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.1,
-                response_format={"type": "json_object"}
+            model = genai.GenerativeModel("models/gemini-2.5-flash")
+            # Generate JSON response
+            response = model.generate_content(
+                prompt,
+                generation_config=genai.types.GenerationConfig(
+                    temperature=0.1,
+                    response_mime_type="application/json",
+                ),
             )
+            result_text = response.text.strip()
             
             # Parse the response
-            result_text = completion.choices[0].message.content
             clean_text = re.sub(r'```json|```', '', result_text).strip()
             data = json.loads(clean_text)
 
@@ -511,48 +606,15 @@ class RequirementView(APIView):
         try:
             requirement = Requirement.objects.get(pk=pk)
         except Requirement.DoesNotExist:
-            return Response({"error": "Requirement not found"}, status=status.HTTP_404_NOT_FOUND)
+            return Response(
+                {"error": "Requirement not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
         serializer = RequirementSerializer(requirement, data=request.data)
+
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_200_OK)
+
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-
-
-import os
-import instaloader
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status
-from urllib.parse import urlparse
-from django.conf import settings
-
-class InstagramDownloadView(APIView):
-    def post(self, request):
-        url = request.data.get("url")
-        if not url:
-            return Response({"error": "URL is required"}, status=status.HTTP_400_BAD_REQUEST)
-
-        # Create download directory
-        download_dir = os.path.join(settings.MEDIA_ROOT, "instagram_downloads")
-        os.makedirs(download_dir, exist_ok=True)
-
-        loader = instaloader.Instaloader(dirname_pattern=download_dir, save_metadata=False, download_comments=False)
-
-        try:
-            # Extract shortcode from the URL
-            parsed = urlparse(url)
-            shortcode = parsed.path.strip("/").split("/")[-1]
-
-            # Download post
-            post = instaloader.Post.from_shortcode(loader.context, shortcode)
-            loader.download_post(post, target=download_dir)
-
-            return Response({
-                "message": "Downloaded successfully",
-                "shortcode": shortcode,
-                "file_path": download_dir
-            }, status=status.HTTP_200_OK)
-        except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

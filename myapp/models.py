@@ -1,6 +1,8 @@
-from django.db import models
 import uuid
-
+from django.db import models
+from django.contrib.auth.models import AbstractUser
+from django.utils.translation import gettext as _
+from .managers import CustomUserManager
 
 TECHNOLOGY_CHOICES = [
         ('python', 'Python'),
@@ -15,14 +17,35 @@ DIFFICULTY_CHOICES = [
         ('hard', 'Hard'),
     ]
 
+USER_CHOICES = [
+        ('Admin', 'Admin'),
+        ('Normal', 'Normal'),
+    ]
+
+INTERVIEW_CHOICES = [
+        ('Pending', 'Pending'),
+        ('Completed', 'Completed'),
+        ('Scheduled', 'Scheduled'),
+        ('All', 'All'),
+    ]
+
+class User(AbstractUser):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=150, blank=True, null=True)
+    email = models.EmailField(unique=True)
+    designation = models.CharField(max_length=150, blank=True, null=True)
+    role = models.CharField(max_length=50, choices=USER_CHOICES, blank=True, null=True, default="Normal")
+
+    USERNAME_FIELD = 'email'
+    REQUIRED_FIELDS = ['username']
+
+    objects = CustomUserManager()
+
+    def __str__(self):
+        return self.email
+
 
 class Candidate(models.Model):
-    TECHNOLOGY_CHOICES = [
-        ('Python', 'Python'),
-        ('.NET', '.NET'),
-        ('Java', 'Java'),
-        ('React', 'React'),
-    ]
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=100)
     technology = models.CharField(max_length=50, choices=TECHNOLOGY_CHOICES)
@@ -50,12 +73,6 @@ class Requirement(models.Model):
 
 
 class HrModels(models.Model):
-    INTERVIEW_CHOICES = [
-        ('Pending', 'Pending'),
-        ('Completed', 'Completed'),
-        ('Scheduled', 'Scheduled'),
-        ('All', 'All'),
-    ]
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     requirement = models.ForeignKey(Requirement, on_delete=models.CASCADE, related_name="requirement",null=True, blank=True)
     upload_doc = models.FileField(upload_to='uploads/', blank=True, null=True)
@@ -91,7 +108,6 @@ class Question(models.Model):
     )
     time_limit = models.IntegerField(default=120)
     created_at = models.DateTimeField(auto_now_add=True)
-
 
 
 class Photo(models.Model):

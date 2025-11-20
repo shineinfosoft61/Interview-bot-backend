@@ -1,0 +1,12 @@
+django-admin
+django
+celery
+dotenv
+djangorestframework
+django-cors-headers
+pymysql
+openai
+PyPDF2
+python-docx
+google-generativeai
+instaloader

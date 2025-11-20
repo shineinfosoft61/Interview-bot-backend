@@ -13,6 +13,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 from pathlib import Path
 import os
 from dotenv import load_dotenv
+from datetime import timedelta
 
 # Load environment variables
 load_dotenv()
@@ -92,11 +93,11 @@ WSGI_APPLICATION = 'interviewbot.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
-        'NAME': 'interview_db',
-        'USER': 'root',
-        'PASSWORD': 'root',
-        'HOST': 'localhost',   # or IP address, e.g. "127.0.0.1"
-        'PORT': '3306',        # default MySQL port
+        'NAME': os.getenv("DB_NAME"),
+        'USER': os.getenv("DB_USER"),
+        'PASSWORD': os.getenv("DB_PASS"),
+        'HOST': os.getenv("DB_HOST"),   # or IP address, e.g. "127.0.0.1"
+        'PORT': os.getenv("DB_PORT"),        # default MySQL port
     }
 }
 
@@ -142,6 +143,8 @@ STATIC_URL = 'static/'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
+AUTH_USER_MODEL = 'myapp.User'
+
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",   # Vite
     "http://127.0.0.1:5173",
@@ -149,6 +152,7 @@ CORS_ALLOWED_ORIGINS = [
 
 # For quick testing (remove later in prod)
 CORS_ALLOW_ALL_ORIGINS = True
+
 
 # settings.py
 CELERY_BROKER_URL = "redis://localhost:6379/0"
@@ -176,3 +180,16 @@ DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+
+# Rest Framework
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    )
+}
+
+# Simple JWT Token
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(days=1),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=5),
+}
