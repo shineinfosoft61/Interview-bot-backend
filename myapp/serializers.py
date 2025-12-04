@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Candidate, Question, QuestionAnswer, HrModels, Photo, Requirement, User
+from .models import Question, QuestionAnswer, Candidate, Photo, Requirement, User
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -24,11 +24,6 @@ class QuestionSerializer(serializers.ModelSerializer):
         model = Question
         fields = '__all__'
 
-class CandidateSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Candidate
-        fields = '__all__'
-
 class AnswerSerializer(serializers.ModelSerializer):
     class Meta:
         model = QuestionAnswer
@@ -49,7 +44,7 @@ class HrSerializer(serializers.ModelSerializer):
     answers = AnswerHrSerializer(many=True, read_only=True)
     photos = PhotoSerializer(many=True, read_only=True)
     class Meta:
-        model = HrModels
+        model = Candidate
         fields = '__all__'
 
 class RequirementSerializer(serializers.ModelSerializer):
@@ -59,3 +54,7 @@ class RequirementSerializer(serializers.ModelSerializer):
 
 class InstagramDownloadSerializer(serializers.Serializer):
     url = serializers.URLField(required=True)
+
+
+class ChatAiSerializer(serializers.Serializer):
+    question = serializers.CharField()

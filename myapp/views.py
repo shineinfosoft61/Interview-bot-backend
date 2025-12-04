@@ -2,31 +2,36 @@ import random
 import re
 import json
 import time
+import tempfile
+import os
+import docx
 
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status
-from .models import Question, HrModels, Requirement, QuestionAnswer, User
-from .serializers import AnswerSerializer, CandidateSerializer, QuestionSerializer, HrSerializer, PhotoSerializer, RequirementSerializer, RegisterSerializer, LoginSerializer
+from .models import Question, Requirement, QuestionAnswer, User, Candidate
+from .serializers import (AnswerSerializer, 
+                          QuestionSerializer, 
+                          HrSerializer, 
+                          PhotoSerializer, 
+                          RequirementSerializer, 
+                          RegisterSerializer, 
+                          LoginSerializer,
+                          ChatAiSerializer
+                        )          
 from .utils import analyze_facial_expressions
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status
-from rest_framework.parsers import MultiPartParser, FormParser
 from .tasks import rate_answer
+
+from rest_framework import status
+from rest_framework.response import Response
+from rest_framework.views import APIView
 from openai import OpenAI
 from PyPDF2 import PdfReader
 from django.conf import settings
 from django.core.mail import send_mail
 from django.core.exceptions import ValidationError
 from io import BytesIO
-import tempfile
-import os
-import docx
 import google.generativeai as genai
 from django.contrib.auth import authenticate, login as auth_login
 from rest_framework_simplejwt.tokens import RefreshToken
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 
 
 client = OpenAI(
@@ -98,7 +103,7 @@ class LoginView(APIView):
                     'access': str(refresh.access_token),
                     'user': {
                         'id': user.id,
-                        'name': user.name,
+                        'username': user.username,
                         'email': user.email,
                         'role': user.role,
                         'is_staff': user.is_staff,
@@ -113,22 +118,22 @@ class QuestionListAPIView(APIView):
     def get(self, request, pk=None):
         if pk:
             try:
-                hr = HrModels.objects.get(pk=pk)
-            except HrModels.DoesNotExist:
-                return Response({"error": "HR not found."}, status=status.HTTP_404_NOT_FOUND)
-            question = Question.objects.filter(hr=hr)
+                candidate = Candidate.objects.get(pk=pk)
+            except Candidate.DoesNotExist:
+                return Response({"error": "Candidate not found."}, status=status.HTTP_404_NOT_FOUND)
+            question = Question.objects.filter(candidate=candidate)
             if question:
                 serializer = QuestionSerializer(question, many=True)
                 return Response(serializer.data)
             else:
-                questions = list(Question.objects.all().exclude(hr=hr))
+                questions = list(Question.objects.all().exclude(candidate=candidate))
                 if not questions:
                     return Response({"message": "No questions available."}, status=404)
                 random_questions = random.sample(questions, min(len(questions), 10))
 
                 serializer = QuestionSerializer(random_questions, many=True)
                 return Response(serializer.data)
-        return Response({"error": "HR not found."}, status=status.HTTP_404_NOT_FOUND)
+        return Response({"error": "Candidate not found."}, status=status.HTTP_404_NOT_FOUND)
 
     def post(self, request):
         file = request.FILES.get('file')
@@ -179,29 +184,6 @@ class QuestionListAPIView(APIView):
             return Response(serializer.data, status=status.HTTP_201_CREATED)
             
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-    
-
-class CandidateCreateView(APIView):
-    parser_classes = (MultiPartParser, FormParser)
-
-    def get(self, request, pk):
-
-        try:
-            hr = HrModels.objects.get(pk=pk)
-        except HrModels.DoesNotExist:
-            return Response({"error": "Invalid link or candidate not found."}, status=status.HTTP_404_NOT_FOUND)
-
-        if hr.interview_closed:
-            return Response({"error": "This interview link is no longer accessible."}, status=status.HTTP_403_FORBIDDEN)
-
-        return Response({"interview_closed": hr.interview_closed}, status=status.HTTP_200_OK)
-
-    def post(self, request, *args, **kwargs):
-        serializer = CandidateSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 class AnswerSaveView(APIView):
@@ -221,20 +203,27 @@ class AnswerSaveView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
-class hrView(APIView):
-    permission_classes = [IsAuthenticated]
+class CandidateView(APIView):
+    def get_permissions(self):
+        # Allow anyone to access GET; require auth for other methods
+        if self.request.method == 'GET':
+            return [AllowAny()]
+        elif self.request.method == 'PUT':
+            return [AllowAny()]
+        return [IsAuthenticated()]
+    
     def get(self,request, pk=None):
         if pk:
             try:
-                hr_objects = HrModels.objects.get(pk=pk)
+                hr_objects = Candidate.objects.get(pk=pk)
             except (ValueError, ValidationError):
                 return Response({"error": "Invalid id format. Must be a UUID."}, status=status.HTTP_400_BAD_REQUEST)
-            except HrModels.DoesNotExist:
+            except Candidate.DoesNotExist:
                 return Response({"error": "HR record not found."}, status=status.HTTP_404_NOT_FOUND)
             serializer = HrSerializer(hr_objects)
             return Response(serializer.data, status=status.HTTP_200_OK)
         else:
-            hr_objects = HrModels.objects.all().order_by('-created_at')
+            hr_objects = Candidate.objects.all().order_by('-created_at')
             serializer = HrSerializer(hr_objects, many=True)
             return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -248,14 +237,23 @@ class hrView(APIView):
         for file in files:
             text = ""
             try:
-                reader = PdfReader(file)
-                for page in reader.pages:
-                    text += page.extract_text() + "\n"
+                filename = file.name.lower()
+                if filename.endswith('.pdf'):
+                    reader = PdfReader(file)
+                    for page in reader.pages:
+                        text += page.extract_text() + "\n"
+                elif filename.endswith('.docx'):
+                    document = docx.Document(file)
+                    for para in document.paragraphs:
+                        if para.text.strip():
+                            text += para.text + "\n"
+                else:
+                    return Response({"error": "Unsupported file type. Please upload .pdf or .docx"}, status=status.HTTP_400_BAD_REQUEST)
             except Exception as e:
                 return Response({"error": f"Failed to read resume: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
 
             if not text.strip():
-                return Response({"error": "Could not extract any readable text from the uploaded PDF."}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({"error": "Could not extract any readable text from the uploaded document."}, status=status.HTTP_400_BAD_REQUEST)
 
             prompt = f"""
                     Extract the following fields from this resume text: 
@@ -331,7 +329,7 @@ class hrView(APIView):
                         },
                         status=status_code,
                     )
-            if HrModels.objects.filter(email=data.get("email")).exists():
+            if Candidate.objects.filter(email=data.get("email")).exists():
                 return Response(
                     {
                         "error": "Email already exists.",
@@ -340,7 +338,7 @@ class hrView(APIView):
                     status=400,
                 )
 
-            hr_obj = HrModels.objects.create(
+            hr_obj = Candidate.objects.create(
                 upload_doc=file,
                 name=data.get("name", ""),
                 email=data.get("email", ""),
@@ -360,14 +358,17 @@ class hrView(APIView):
 
     def put(self, request, pk):
         try:
-            hr_obj = HrModels.objects.get(pk=pk)
-        except HrModels.DoesNotExist:
-            return Response({"error": "HrModels not found"}, status=status.HTTP_404_NOT_FOUND)
+            hr_obj = Candidate.objects.get(pk=pk)
+        except Candidate.DoesNotExist:
+            return Response({"error": "Candidate not found"}, status=status.HTTP_404_NOT_FOUND)
 
         serializer = HrSerializer(hr_obj, data=request.data, partial=True)
         if serializer.is_valid():
             interview_time = serializer.validated_data.get("time")
             interview_status = serializer.validated_data.get("interview_status")
+            interview_quick = serializer.validated_data.get("is_quick")
+            requirement = serializer.validated_data.get("requirement")
+            is_selected = serializer.validated_data.get("is_selected")
 
             # If time is added, mark as scheduled and send email
             if interview_time:
@@ -404,9 +405,15 @@ class hrView(APIView):
 
                 return Response(serializer.data, status=status.HTTP_200_OK)
             if interview_status == "Completed":
-                answers = list(QuestionAnswer.objects.filter(hr=hr_obj).values_list("answer_text", flat=True))
+                print("hr_obj:", hr_obj)
+                print("hr_obj.id:", hr_obj.id)
+                answers = list(
+                    QuestionAnswer.objects.filter(candidate_id=hr_obj.id)
+                    .values_list("answer_text", flat=True)
+                )
+                print("Answer------=-", answers)
                 if not answers:
-                    return None
+                    return Response({"message": "No answers found"}, status=200)
 
                 prompt = (
                     "Evaluate the candidate's communication skills based on the provided answers.\n"
@@ -445,6 +452,7 @@ class hrView(APIView):
                     print("error", e)
                     result_text = None
 
+                print("Result Text", result_text)
                 if not result_text:
                     return None
 
@@ -456,6 +464,88 @@ class hrView(APIView):
                 
                 facial = analyze_facial_expressions(hr_obj)
 
+            if interview_quick and str(hr_obj.requirement) != str(requirement):
+                prompt = f"""
+                You are an expert technical interviewer.
+
+                Generate 10 short, clear, challenging interview questions based on:
+
+                ### Requirement / Job Description
+                {requirement.base_text}
+
+                ### Candidate Information
+                Name: {hr_obj.name}
+                Email: {hr_obj.email}
+                Experience: {hr_obj.experience} years
+                Technology: {hr_obj.technology}
+
+                ### Rules:
+                - Focus questions on required technologies, tools, frameworks & experience level
+                - Include mix of theoretical + practical scenario questions
+                - Make questions specific, not generic
+                - Avoid yes/no questions
+                - Do NOT repeat similar questions
+                - Keep each question under 20 words
+
+                ### Output JSON Format ONLY:
+                {{
+                "questions": [
+                    "Question 1 tell me about yourself",
+                    "Question 2",
+                    ...
+                    "Question 10"
+                ]
+                }}
+                """
+                model = genai.GenerativeModel("models/gemini-2.5-flash")
+                response = model.generate_content(
+                    prompt,
+                    generation_config=genai.types.GenerationConfig(
+                        temperature=0.1,
+                        response_mime_type="application/json",
+                    ),
+                )
+
+                result = json.loads(response.text)
+                questions = result.get("questions", [])
+
+                question_objs = [Question(candidate=hr_obj, text=q) for q in questions ]
+
+                Question.objects.bulk_create(question_objs)
+            if is_selected == True or is_selected == False:
+                hr_obj.save(update_fields=["is_selected"])
+                serializer.save()
+
+                subject = f"Interview Result"
+                if is_selected == True:
+                    message = (
+                        f"Hello {hr_obj.name},\n\n"
+                        f"Congratulations! You're selected in the interview.\n"
+                        f"Hr is connected you soon.\n"
+                        f"Best regards,\n"
+                        f"HR Team."
+                    )
+                elif is_selected == False:
+                    message = (
+                        f"Hello {hr_obj.name},\n\n" 
+                        f"Unfortunately, you are not selected in the interview.\n" 
+                        f"Good luck for next interview.\n" 
+                        f"Best regards,\n" 
+                        f"HR Team."
+                    )
+                if hr_obj.email:
+                    try:
+                        send_mail(
+                            subject=subject,
+                            message=message,
+                            from_email=settings.DEFAULT_FROM_EMAIL,
+                            recipient_list=[hr_obj.email],
+                            fail_silently=False,
+                        )
+                    except Exception as e:
+                        print(f"Email sending failed: {e}")
+
+                return Response(serializer.data, status=status.HTTP_200_OK)
             serializer.save()
             return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -465,17 +555,17 @@ class hrView(APIView):
 class PhotoView(APIView):
     def get(self, request, pk):
         try:
-            hr_obj = HrModels.objects.get(pk=pk)
-        except HrModels.DoesNotExist:
-            return Response({"error": "HrModels not found"}, status=status.HTTP_404_NOT_FOUND)
+            hr_obj = Candidate.objects.get(pk=pk)
+        except Candidate.DoesNotExist:
+            return Response({"error": "Candidate not found"}, status=status.HTTP_404_NOT_FOUND)
         serializer = PhotoSerializer(hr_obj.photos.all(), many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def post(self, request, pk):
         try:
-            hr_obj = HrModels.objects.get(pk=pk)
-        except HrModels.DoesNotExist:
-            return Response({"error": "HrModels not found"}, status=status.HTTP_404_NOT_FOUND)
+            hr_obj = Candidate.objects.get(pk=pk)
+        except Candidate.DoesNotExist:
+            return Response({"error": "Candidate not found"}, status=status.HTTP_404_NOT_FOUND)
         serializer = PhotoSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save()
@@ -522,6 +612,18 @@ class RequirementView(APIView):
                 finally:
                     if os.path.exists(temp_file_path):
                         os.unlink(temp_file_path)
+            # Handle PDF files
+            elif file_extension == 'pdf':
+                try:
+                    pdf_reader = PdfReader(BytesIO(file_data))
+                    for page in pdf_reader.pages:
+                        extracted = page.extract_text()
+                        if extracted:
+                            text += extracted + "\n"
+                except Exception as e:
+                    return Response({"error": f"Failed to read PDF: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+            else:
+                return Response({"error": "Unsupported file type. Please upload .docx, .doc, or .pdf"}, status=status.HTTP_400_BAD_REQUEST)
             if not text.strip():
                 return Response({"error": "Could not extract any text from the uploaded file"}, 
                              status=status.HTTP_400_BAD_REQUEST)
@@ -580,6 +682,7 @@ class RequirementView(APIView):
             # Create the requirement with extracted data
             requirement = Requirement.objects.create(
                 file=file,
+                base_text=text,
                 name=data.get('name'),
                 experience=data.get('experience'),
                 technology=data.get('technology'),
@@ -616,5 +719,27 @@ class RequirementView(APIView):
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_200_OK)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class ChatAiView(APIView):
+    def post(self, request):
+        print('---------------------')
+        serializer = ChatAiSerializer(data=request.data)
+        if serializer.is_valid():
+            user_message = serializer.validated_data['question']
+
+            # Generate response using the model
+            model = genai.GenerativeModel("models/gemini-2.5-flash")
+            chat = model.start_chat()
+            response = chat.send_message(user_message)
+
+            data = {
+                "question": user_message,
+                "response": response.text,
+            }
+
+            return Response({"data": data}, status=status.HTTP_200_OK)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

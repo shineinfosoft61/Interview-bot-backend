@@ -1,7 +1,7 @@
 import json
 from openai import OpenAI
 from django.conf import settings
-from .models import HrModels, QuestionAnswer
+from .models import Candidate, QuestionAnswer
 import time
 from collections import Counter
 
@@ -16,10 +16,10 @@ except Exception as e:
 
 def analyze_facial_expressions(hr_obj):
     """
-    Analyze facial expressions for all photos attached to the given HrModels record
+    Analyze facial expressions for all photos attached to the given Candidate record
     using FER (mtcnn=True). Looks at ALL detected faces in every image.
 
-    Saves a structured summary to `HrModels.emotion_summary` and returns it, for example:
+    Saves a structured summary to `Candidate.emotion_summary` and returns it, for example:
     {
         "total_photos": 3,
         "total_faces": 5,
