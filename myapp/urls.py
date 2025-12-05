@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import AnswerSaveView, QuestionListAPIView, CandidateView, PhotoView, RequirementView, RegisterView, LoginView, ChatAiView
+from .views import AnswerSaveView, QuestionListAPIView, CandidateView, PhotoView, RequirementView, RegisterView, LoginView, ChatAiView, JDAssistantView
 
 urlpatterns = [
     path('register/', RegisterView.as_view(), name='register'),
@@ -14,4 +14,5 @@ urlpatterns = [
     path('requirement/', RequirementView.as_view(), name="requirement"),
     path('requirement/<uuid:pk>/', RequirementView.as_view(), name="requirement"),
     path('chat/', ChatAiView.as_view(), name="chat"),
+    path('jd-assistant/<str:action>/', JDAssistantView.as_view(), name="jd-assistant"),
 ]

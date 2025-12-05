@@ -11,9 +11,9 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.AddField(
-            model_name='questionanswer',
-            name='candidate',
-            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='answers', to='myapp.candidate'),
-        ),
+        # migrations.AddField(
+        #     model_name='questionanswer',
+        #     name='candidate',
+        #     field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='answers', to='myapp.candidate'),
+        # ),
     ]

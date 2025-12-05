@@ -12,6 +12,7 @@ from .serializers import (AnswerSerializer,
                           HrSerializer, 
                           PhotoSerializer, 
                           RequirementSerializer, 
+                          PublicCandidateSerializer, 
                           RegisterSerializer, 
                           LoginSerializer,
                           ChatAiSerializer
@@ -38,7 +39,7 @@ client = OpenAI(
                 base_url=settings.OPENROUTER_BASE_URL,
                 api_key=settings.OPENROUTER_API_KEY,
             )
-genai.configure(api_key="AIzaSyCkS_laQWhLDMbfLTR94YK50c85AikXk5I")
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
 
 class RegisterView(APIView):
@@ -220,7 +221,7 @@ class CandidateView(APIView):
                 return Response({"error": "Invalid id format. Must be a UUID."}, status=status.HTTP_400_BAD_REQUEST)
             except Candidate.DoesNotExist:
                 return Response({"error": "HR record not found."}, status=status.HTTP_404_NOT_FOUND)
-            serializer = HrSerializer(hr_objects)
+            serializer = PublicCandidateSerializer(hr_objects)
             return Response(serializer.data, status=status.HTTP_200_OK)
         else:
             hr_objects = Candidate.objects.all().order_by('-created_at')
@@ -262,11 +263,40 @@ class CandidateView(APIView):
                     - phone
                     - technology (take only one main technology)
                     - experience (total experience)
-                    - company (all company name like infotech,infosys,soft etc)
-                    Return only valid JSON (no explanations, no ```json blocks).
+                    - companies (array of objects with company_name, start_date, end_date)
+                    
+                    Date Requirements:
+                    - Convert ALL dates to YYYY-MM format (e.g., 2024-07, 2025-03)
+                    - If only year is available, use YYYY format (e.g., 2024)
+                    - If date is unclear, use null
+                    - Handle various formats: "July 2024", "12/03/2022", "2022-2024", etc.
+                    - IMPORTANT: If candidate is currently working at company (end date shows "present", "current", "till date", "ongoing", etc.), set end_date = "running"
+                    
+                    Return only valid JSON (no explanations, no ```json blocks) with this format:
+                    {{
+                        "name": "John Doe",
+                        "email": "john@example.com",
+                        "phone": "+1234567890",
+                        "technology": "React",
+                        "experience": "2 years 3 months",
+                        "companies": [
+                            {{
+                                "company_name": "Tech Corp",
+                                "start_date": "2022-01",
+                                "end_date": "2024-03"
+                            }},
+                            {{
+                                "company_name": "Current Company Inc",
+                                "start_date": "2024-04",
+                                "end_date": "running"
+                            }}
+                        ]
+                    }}
+                    
                     Resume text:
                     {text}
                 """
+            print(prompt)
 
             # Try LLM with simple retries
             result_text = None
@@ -285,12 +315,17 @@ class CandidateView(APIView):
                     )
                     # Extract text safely
                     result_text = getattr(response, "text", None)
+                    print("===================")
+                    # print(result_text)
                     if result_text:
                         result_text = result_text.strip()
                     break  # exit loop on success
 
                 except Exception as e:
-                    last_error = e
+                    last_error = str(e)
+                    # If it's a quota error, don't retry
+                    if "429" in last_error or "quota" in last_error.lower():
+                        break
                     print(f"Attempt {attempt+1} failed: {e}")
                     time.sleep(1.0)  # backoff before retrying
 
@@ -298,6 +333,7 @@ class CandidateView(APIView):
             if result_text:
                 try:
                     clean_text = re.sub(r"```json|```", "", result_text).strip()
+                    print(clean_text)
                     data = json.loads(clean_text)
                 except Exception as e:
                     # fall back to heuristic parsing if LLM output is malformed
@@ -312,12 +348,38 @@ class CandidateView(APIView):
                 first_line = next((ln.strip() for ln in text.splitlines() if ln and len(ln.strip()) > 1), "")
                 tech_map = ["python", ".net", "java", "react"]
                 tech = next((t for t in tech_map if t in lowered), "")
+                
+                # Extract companies using regex in fallback
+                companies = []
+                # Look for company names patterns
+                company_patterns = [
+                    r"(?:worked at|employed by|experience at|company|private|limited|ltd|inc|corp|technologies|solutions|systems|services)\s+([A-Za-z0-9\s&]+?)(?:\n|,|\.|\s+from|\s+since|\s+to|\s+till|\s+-|\s*\(|\s*[0-9]{4})",
+                    r"([A-Za-z0-9\s&]+?(?:technologies|solutions|systems|services|limited|ltd|inc|corp))\s*(?:\n|,|\.|\s+from|\s+since|\s+to|\s+till|\s+-|\s*\(|\s*[0-9]{4})",
+                    r"^\s*([A-Za-z0-9\s&]{2,50})\s*\n.*?(?:[0-9]{4}|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)"
+                ]
+                
+                for pattern in company_patterns:
+                    matches = re.findall(pattern, text, re.IGNORECASE | re.MULTILINE)
+                    for match in matches:
+                        company_name = match.strip() if isinstance(match, str) else match[0].strip() if match else ""
+                        if len(company_name) > 2 and len(company_name) < 100:
+                            # Avoid duplicates
+                            if not any(comp.get("company_name", "").lower() == company_name.lower() for comp in companies):
+                                companies.append({
+                                    "company_name": company_name,
+                                    "start_date": None,
+                                    "end_date": None
+                                })
+                
+                # Limit to first 5 companies to avoid too much data
+                companies = companies[:5]
+                
                 data = {
                     "name": first_line[:100],
                     "email": email_match.group(0) if email_match else "",
                     "phone": phone_match.group(0) if phone_match else "",
                     "technology": tech,
-                    "company": [],
+                    "companies": companies,
                 }
                 if not any([data.get("name"), data.get("email"), data.get("phone"), data.get("technology")]):
                     # If even fallback got nothing useful, respond gracefully with 503 if provider failed, else 422
@@ -329,7 +391,8 @@ class CandidateView(APIView):
                         },
                         status=status_code,
                     )
-            if Candidate.objects.filter(email=data.get("email")).exists():
+            email = data.get("email")
+            if email and Candidate.objects.filter(email=email).exists():
                 return Response(
                     {
                         "error": "Email already exists.",
@@ -338,14 +401,22 @@ class CandidateView(APIView):
                     status=400,
                 )
 
+            # Store raw extracted document text in base_text
+            llm_response = data if not fallback_used else {"fallback": True, "data": data}
+            
+            # Debug logging
+            print(f"Extracted companies: {data.get('companies', [])}")
+            print(f"Number of companies: {len(data.get('companies', []))}")
+            
             hr_obj = Candidate.objects.create(
                 upload_doc=file,
                 name=data.get("name", ""),
                 email=data.get("email", ""),
                 phone=data.get("phone", ""),
+                experience=data.get("experience", ""),
                 technology=data.get("technology", ""),
-                experience=str(data.get("experience", "")),
-                company=data.get("company", []),
+                company=data.get("companies", []),
+                base_text=text,  # Store raw document text instead of LLM response
             )
             frontend_base = "http://localhost:5173"
             hr_obj.shine_link = f"{frontend_base}/{hr_obj.id}/"
@@ -454,7 +525,7 @@ class CandidateView(APIView):
 
                 print("Result Text", result_text)
                 if not result_text:
-                    return None
+                    return Response({"error": "Failed to generate communication evaluation"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
                 result_json = json.loads(result_text)
                 if "communication_point" in result_json:
@@ -465,53 +536,56 @@ class CandidateView(APIView):
                 facial = analyze_facial_expressions(hr_obj)
 
             if interview_quick and str(hr_obj.requirement) != str(requirement):
-                prompt = f"""
-                You are an expert technical interviewer.
+                try:
+                    prompt = f"""
+                    You are an expert technical interviewer.
 
-                Generate 10 short, clear, challenging interview questions based on:
+                    Generate 10 short, clear, challenging interview questions based on:
 
-                ### Requirement / Job Description
-                {requirement.base_text}
+                    ### Requirement / Job Description
+                    {requirement.base_text}
 
-                ### Candidate Information
-                Name: {hr_obj.name}
-                Email: {hr_obj.email}
-                Experience: {hr_obj.experience} years
-                Technology: {hr_obj.technology}
+                    ### Candidate Information
+                    Name: {hr_obj.name}
+                    Email: {hr_obj.email}
+                    Experience: {hr_obj.experience} years
+                    Technology: {hr_obj.technology}
 
-                ### Rules:
-                - Focus questions on required technologies, tools, frameworks & experience level
-                - Include mix of theoretical + practical scenario questions
-                - Make questions specific, not generic
-                - Avoid yes/no questions
-                - Do NOT repeat similar questions
-                - Keep each question under 20 words
+                    ### Rules:
+                    - Focus questions on required technologies, tools, frameworks & experience level
+                    - Include mix of theoretical + practical scenario questions
+                    - Make questions specific, not generic
+                    - Avoid yes/no questions
+                    - Do NOT repeat similar questions
+                    - Keep each question under 20 words
 
-                ### Output JSON Format ONLY:
-                {{
-                "questions": [
-                    "Question 1 tell me about yourself",
-                    "Question 2",
-                    ...
-                    "Question 10"
-                ]
-                }}
-                """
-                model = genai.GenerativeModel("models/gemini-2.5-flash")
-                response = model.generate_content(
-                    prompt,
-                    generation_config=genai.types.GenerationConfig(
-                        temperature=0.1,
-                        response_mime_type="application/json",
-                    ),
-                )
+                    ### Output JSON Format ONLY:
+                    {{
+                    "questions": [
+                        "Question 1 tell me about yourself",
+                        "Question 2",
+                        ...
+                        "Question 10"
+                    ]
+                    }}
+                    """
+                    model = genai.GenerativeModel("models/gemini-2.5-flash")
+                    response = model.generate_content(
+                        prompt,
+                        generation_config=genai.types.GenerationConfig(
+                            temperature=0.1,
+                            response_mime_type="application/json",
+                        ),
+                    )
 
-                result = json.loads(response.text)
-                questions = result.get("questions", [])
+                    result = json.loads(response.text)
+                    questions = result.get("questions", [])
 
-                question_objs = [Question(candidate=hr_obj, text=q) for q in questions ]
+                    question_objs = [Question(candidate=hr_obj, text=q) for q in questions ]
 
-                Question.objects.bulk_create(question_objs)
+                    Question.objects.bulk_create(question_objs)
+                except Exception as e:
+                    print(f"Failed to generate questions: {e}")
             if is_selected == True or is_selected == False:
                 hr_obj.save(update_fields=["is_selected"])
                 serializer.save()
@@ -721,6 +795,265 @@ class RequirementView(APIView):
             return Response(serializer.data, status=status.HTTP_200_OK)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class JDAssistantView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request, action):
+        """
+        Handle different JD assistant actions:
+        - analyze: Extract and validate JD fields from user message
+        - generate: Generate complete JD based on fields
+        - save: Save generated JD to database
+        """
+        if action == 'analyze':
+            return self.analyze_input(request)
+        elif action == 'generate':
+            return self.generate_jd(request)
+        elif action == 'save':
+            return self.save_jd(request)
+        else:
+            return Response({"error": "Invalid action"}, status=status.HTTP_400_BAD_REQUEST)
+    
+    def analyze_input(self, request):
+        """Analyze user message and extract JD fields"""
+        message = request.data.get('message', '')
+        if not message:
+            return Response({"error": "Message is required"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        prompt = f"""
+        Analyze this job description request and extract structured information.
+        
+        Required fields to extract:
+        - name (Job title/position name)  -- this is OPTIONAL, you may infer it from technology/experience
+        - experience (Required experience in years or range)
+        - technology (Primary technology stack)
+        - No_of_openings (Number of positions, integer)
+        - notice_period (Notice period in days, integer)
+        - priority (Boolean: true if urgent/high priority)
+        
+        User message: "{message}"
+        
+        Return only valid JSON with this format:
+        {{
+            "status": "ready" or "need_more_info",
+            "fields": {{
+                "name": "extracted JD name or null",
+                "experience": "extracted value or null", 
+                "technology": "extracted value or null",
+                "No_of_openings": extracted_integer_or_null,
+                "notice_period": extracted_integer_or_null,
+                "priority": true_or_false_or_null
+            }},
+            "missing_fields": ["list", "of", "missing", "field", "names"]
+        }}
+        
+        Rules:
+        - REQUIRED fields are only: experience and technology
+        - The JD name (field "name") is OPTIONAL. If possible, infer a good JD name, otherwise leave it null.
+        - Set status to "ready" only if experience AND technology are provided
+        - Set status to "need_more_info" if either experience or technology is missing
+        - For No_of_openings, notice_period: extract numbers or set null
+        - For priority: detect words like "urgent", "immediate", "high priority" as true
+        - Include ONLY the actually missing required fields (experience, technology) in missing_fields array
+        """
+        
+        try:
+            model = genai.GenerativeModel("models/gemini-2.5-flash")
+            response = model.generate_content(
+                prompt,
+                generation_config=genai.types.GenerationConfig(
+                    temperature=0.1,
+                    response_mime_type="application/json",
+                ),
+            )
+            
+            result_text = getattr(response, "text", None)
+            if result_text:
+                result_text = result_text.strip()
+                clean_text = re.sub(r"```json|```", "", result_text).strip()
+                data = json.loads(clean_text)
+                return Response(data, status=status.HTTP_200_OK)
+            else:
+                return Response({"error": "Failed to analyze input"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                
+        except Exception as e:
+            return Response({"error": f"Analysis failed: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+    def generate_jd(self, request):
+        """Generate complete job description based on provided fields"""
+        # Accept either `fields` (preferred) or `analysis_data` (from frontend)
+        raw_fields = request.data.get('fields')
+        analysis_data = request.data.get('analysis_data')
+
+        # If analysis_data is present, support both:
+        # 1) { status, fields: {...}, missing_fields }
+        # 2) { name, experience, technology, No_of_openings, ... } (flat shape from frontend)
+        if not raw_fields and isinstance(analysis_data, dict):
+            inner_fields = analysis_data.get('fields')
+            if isinstance(inner_fields, dict):
+                raw_fields = inner_fields
+            else:
+                # Fallback: treat the full analysis_data as the fields dict
+                raw_fields = analysis_data
+
+        fields = raw_fields or {}
+
+        # Only experience and technology are required; name is optional and can be auto-suggested
+        name = fields.get('name')
+        experience = fields.get('experience')
+        technology = fields.get('technology')
+
+        if not experience or not technology:
+            return Response(
+                {
+                    "error": "Missing required fields",
+                    "details": "Fields 'experience' and 'technology' are required to generate JD.",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Auto-suggest JD name if not provided
+        if not name and technology:
+            name = f"{technology} Developer"
+            fields["name"] = name
+
+        prompt = f"""
+        Generate a comprehensive job description based on these details:
+
+        Job Title: {name}
+        Experience Required: {experience}
+        Technology: {technology}
+        Number of Openings: {fields.get('No_of_openings', 'Not specified')}
+        Notice Period: {fields.get('notice_period', 'Not specified')} days
+        Priority: {'High Priority' if fields.get('priority') else 'Normal'}
+
+        Generate a complete job description with:
+        1. Job Summary
+        2. Responsibilities  
+        3. Requirements (technical and soft skills)
+        4. Nice-to-have skills
+        5. What we offer
+
+        Format as clean text without markdown formatting.
+        """
+
+        try:
+            model = genai.GenerativeModel("models/gemini-2.5-flash")
+            response = model.generate_content(
+                prompt,
+                generation_config=genai.types.GenerationConfig(
+                    temperature=0.3,
+                    response_mime_type="text/plain",
+                ),
+            )
+
+            jd_text = getattr(response, "text", None)
+            if jd_text:
+                return Response(
+                    {
+                        "fields": fields,
+                        "jd_text": jd_text.strip(),
+                    },
+                    status=status.HTTP_200_OK,
+                )
+            else:
+                return Response(
+                    {"error": "Failed to generate job description"},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+
+        except Exception as e:
+            return Response(
+                {"error": f"Generation failed: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+    
+    def save_jd(self, request):
+        """Save generated job description to Requirement model"""
+        fields = request.data.get('fields', {})
+        jd_text = request.data.get('jd_text', '')
+
+        experience = fields.get('experience')
+        technology = fields.get('technology')
+
+        # If required fields are missing, try to extract them from jd_text using Gemini
+        if (not experience or not technology) and jd_text:
+            extract_prompt = f"""
+            From the following job description text, extract structured fields.
+
+            JD Text:
+            {jd_text}
+
+            Return ONLY valid JSON in this format:
+            {{
+                "name": "Job title or null",
+                "experience": "Experience requirement or null",
+                "technology": "Main technology stack or null",
+                "No_of_openings": integer_or_null,
+                "notice_period": integer_or_null,
+                "priority": true_or_false_or_null
+            }}
+            """
+
+            try:
+                model = genai.GenerativeModel("models/gemini-2.5-flash")
+                response = model.generate_content(
+                    extract_prompt,
+                    generation_config=genai.types.GenerationConfig(
+                        temperature=0.1,
+                        response_mime_type="application/json",
+                    ),
+                )
+
+                result_text = getattr(response, "text", None)
+                if result_text:
+                    result_text = result_text.strip()
+                    clean_text = re.sub(r"```json|```", "", result_text).strip()
+                    extracted = json.loads(clean_text)
+
+                    # Merge extracted values into fields if missing
+                    for key in ["name", "experience", "technology", "No_of_openings", "notice_period", "priority"]:
+                        if not fields.get(key) and extracted.get(key) is not None:
+                            fields[key] = extracted.get(key)
+
+                    experience = fields.get('experience')
+                    technology = fields.get('technology')
+            except Exception as e:
+                # If extraction fails, we just proceed with whatever we have
+                print("JD save extraction failed:", e)
+
+        # After best-effort extraction, still require experience and technology
+        if not experience or not technology:
+            return Response(
+                {
+                    "error": "Missing required fields",
+                    "details": "Could not infer 'experience' and 'technology' from JD text.",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Auto-suggest JD name if not provided
+        if not fields.get('name') and technology:
+            fields["name"] = f"{technology} Developer"
+
+        try:
+            requirement = Requirement.objects.create(
+                name=fields.get('name', ''),
+                experience=experience or '',
+                technology=technology or '',
+                No_of_openings=fields.get('No_of_openings'),
+                notice_period=fields.get('notice_period'),
+                priority=fields.get('priority', False),
+                base_text=jd_text  # Store final JD text (including user edits)
+            )
+            
+            serializer = RequirementSerializer(requirement)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            
+        except Exception as e:
+            return Response({"error": f"Save failed: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class ChatAiView(APIView):
