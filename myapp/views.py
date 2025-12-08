@@ -508,7 +508,7 @@ class CandidateView(APIView):
                 )
 
                 try:
-                    model = genai.GenerativeModel("models/gemini-2.5-flash")
+                    model = genai.GenerativeModel("models/gemini-2.5-flash-lite")
 
                     # Generate JSON response
                     response = model.generate_content(
@@ -569,7 +569,7 @@ class CandidateView(APIView):
                     ]
                     }}
                     """
-                    model = genai.GenerativeModel("models/gemini-2.5-flash")
+                    model = genai.GenerativeModel("models/gemini-2.5-flash-lite")
                     response = model.generate_content(
                         prompt,
                         generation_config=genai.types.GenerationConfig(
@@ -983,6 +983,14 @@ class JDAssistantView(APIView):
             extract_prompt = f"""
             From the following job description text, extract structured fields.
 
+            VERY IMPORTANT INSTRUCTIONS FOR THE "technology" FIELD:
+            - Return ONLY the 1 to 3 MAIN technologies / stacks.
+            - Each technology name must be short (for example: "Python", "AWS", "React").
+            - Do NOT include versions, frameworks in brackets, long tool lists or full stacks.
+            - Do NOT return more than 3 items.
+            - If there are many skills, pick only the top 2-3 most central technologies.
+            - Join them in a single short comma-separated string, for example: "Python, AWS".
+
             JD Text:
             {jd_text}
 
@@ -990,7 +998,7 @@ class JDAssistantView(APIView):
             {{
                 "name": "Job title or null",
                 "experience": "Experience requirement or null",
-                "technology": "Main technology stack or null",
+                "technology": "1-3 short main technologies as a comma-separated string or null",
                 "No_of_openings": integer_or_null,
                 "notice_period": integer_or_null,
                 "priority": true_or_false_or_null
@@ -1039,6 +1047,15 @@ class JDAssistantView(APIView):
             fields["name"] = f"{technology} Developer"
 
         try:
+            # Ensure technology is short and focused (fits into CharField(max_length=50))
+            if isinstance(technology, str):
+                # Keep at most 3 comma-separated items and trim each
+                parts = [p.strip() for p in technology.split(',') if p.strip()]
+                parts = parts[:3]
+                # Limit each part length a bit to avoid one very long label
+                parts = [p[:20] for p in parts]
+                technology = ", ".join(parts)[:50]
+
             requirement = Requirement.objects.create(
                 name=fields.get('name', ''),
                 experience=experience or '',
