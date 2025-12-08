@@ -10,14 +10,14 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.AddField(
-            model_name='questionanswer',
-            name='ai_response',
-            field=models.TextField(blank=True, null=True),
-        ),
-        migrations.AddField(
-            model_name='questionanswer',
-            name='rating',
-            field=models.IntegerField(blank=True, null=True),
-        ),
+        # migrations.AddField(
+        #     model_name='questionanswer',
+        #     name='ai_response',
+        #     field=models.TextField(blank=True, null=True),
+        # ),
+        # migrations.AddField(
+        #     model_name='questionanswer',
+        #     name='rating',
+        #     field=models.IntegerField(blank=True, null=True),
+        # ),
     ]

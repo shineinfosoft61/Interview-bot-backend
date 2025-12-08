@@ -12,25 +12,25 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.CreateModel(
-            name='Candidate',
-            fields=[
-                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('name', models.CharField(max_length=100)),
-                ('technology', models.CharField(choices=[('python', 'Python'), ('.net', '.NET'), ('java', 'Java'), ('react', 'React')], max_length=50)),
-                ('experience', models.CharField(max_length=50)),
-                ('photo', models.ImageField(upload_to='photos/')),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-            ],
-        ),
-        migrations.CreateModel(
-            name='QuestionAnswer',
-            fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('answer_text', models.TextField()),
-                ('is_correct', models.BooleanField(default=False)),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('question', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='answers', to='myapp.question')),
-            ],
-        ),
+        # migrations.CreateModel(
+        #     name='Candidate',
+        #     fields=[
+        #         ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
+        #         ('name', models.CharField(max_length=100)),
+        #         ('technology', models.CharField(choices=[('python', 'Python'), ('.net', '.NET'), ('java', 'Java'), ('react', 'React')], max_length=50)),
+        #         ('experience', models.CharField(max_length=50)),
+        #         ('photo', models.ImageField(upload_to='photos/')),
+        #         ('created_at', models.DateTimeField(auto_now_add=True)),
+        #     ],
+        # ),
+        # migrations.CreateModel(
+        #     name='QuestionAnswer',
+        #     fields=[
+        #         ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+        #         ('answer_text', models.TextField()),
+        #         ('is_correct', models.BooleanField(default=False)),
+        #         ('created_at', models.DateTimeField(auto_now_add=True)),
+        #         ('question', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='answers', to='myapp.question')),
+        #     ],
+        # ),
     ]

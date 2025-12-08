@@ -47,6 +47,11 @@ class HrSerializer(serializers.ModelSerializer):
         model = Candidate
         fields = '__all__'
 
+class PublicCandidateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Candidate
+        fields = ['interview_closed', 'name', 'technology', 'experience']
+
 class RequirementSerializer(serializers.ModelSerializer):
     class Meta:
         model = Requirement
