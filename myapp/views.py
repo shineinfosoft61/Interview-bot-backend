@@ -7,23 +7,23 @@ import os
 import docx
 
 from .models import Question, Requirement, QuestionAnswer, User, Candidate
-from .serializers import (AnswerSerializer, 
-                          QuestionSerializer, 
-                          HrSerializer, 
-                          PhotoSerializer, 
-                          RequirementSerializer, 
-                          PublicCandidateSerializer, 
-                          RegisterSerializer, 
-                          LoginSerializer,
-                          ChatAiSerializer
-                        )          
+from .serializers import (
+    AnswerSerializer, 
+    QuestionSerializer, 
+    HrSerializer, 
+    PhotoSerializer, 
+    RequirementSerializer, 
+    PublicCandidateSerializer, 
+    RegisterSerializer, 
+    LoginSerializer,
+    ChatAiSerializer
+)
 from .utils import analyze_facial_expressions
 from .tasks import rate_answer
 
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from openai import OpenAI
 from PyPDF2 import PdfReader
 from django.conf import settings
 from django.core.mail import send_mail
@@ -35,10 +35,6 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.permissions import IsAuthenticated, AllowAny
 
 
-client = OpenAI(
-                base_url=settings.OPENROUTER_BASE_URL,
-                api_key=settings.OPENROUTER_API_KEY,
-            )
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
 
@@ -117,8 +113,10 @@ class LoginView(APIView):
 
 class QuestionListAPIView(APIView):
     def get(self, request, pk=None):
+        print("request==========", request.GET.get('candidate'))
         if pk:
             try:
+                print("================", pk)
                 candidate = Candidate.objects.get(pk=pk)
             except Candidate.DoesNotExist:
                 return Response({"error": "Candidate not found."}, status=status.HTTP_404_NOT_FOUND)
@@ -135,6 +133,47 @@ class QuestionListAPIView(APIView):
                 serializer = QuestionSerializer(random_questions, many=True)
                 return Response(serializer.data)
         return Response({"error": "Candidate not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    def put(self, request, pk=None):
+        """Update a question's text and technology"""
+        if not pk:
+            return Response({"error": "Question ID is required for update"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            question = Question.objects.get(pk=pk, is_deleted=False)
+        except Question.DoesNotExist:
+            return Response({"error": "Question not found."}, status=status.HTTP_404_NOT_FOUND)
+        
+        # Get the fields to update
+        question_text = request.data.get('text')
+        technology = request.data.get('technology')
+        # difficulty_level = request.data.get('difficulty_level')
+        time_limit = request.data.get('time_limit')
+        
+        # Update fields if provided
+        if question_text is not None:
+            question.text = question_text
+        if technology is not None:
+            # Validate technology against choices
+            valid_technologies = [choice[0] for choice in TECHNOLOGY_CHOICES]
+            if technology not in valid_technologies:
+                return Response({"error": f"Invalid technology. Must be one of: {valid_technologies}"}, status=status.HTTP_400_BAD_REQUEST)
+            question.technology = technology
+        if difficulty_level is not None:
+            # Validate difficulty_level against choices
+            valid_difficulties = [choice[0] for choice in DIFFICULTY_CHOICES]
+            if difficulty_level not in valid_difficulties:
+                return Response({"error": f"Invalid difficulty level. Must be one of: {valid_difficulties}"}, status=status.HTTP_400_BAD_REQUEST)
+            question.difficulty_level = difficulty_level
+        if time_limit is not None:
+            try:
+                question.time_limit = int(time_limit)
+            except (ValueError, TypeError):
+                return Response({"error": "time_limit must be a valid integer"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        question.save()
+        serializer = QuestionSerializer(question)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
     def post(self, request):
         file = request.FILES.get('file')
@@ -651,7 +690,7 @@ class PhotoView(APIView):
 class RequirementView(APIView):
     permission_classes = [IsAuthenticated]
     def get(self, request):
-        requirement_objects = Requirement.objects.all().order_by('-created_at')
+        requirement_objects = Requirement.objects.filter(is_deleted=False).order_by('-created_at')
         serializer = RequirementSerializer(requirement_objects, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -795,6 +834,19 @@ class RequirementView(APIView):
             return Response(serializer.data, status=status.HTTP_200_OK)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def delete(self, request, pk=None):
+        """Soft delete a requirement by setting is_deleted=True"""
+        try:
+            requirement = Requirement.objects.get(pk=pk)
+        except (ValueError, ValidationError):
+            return Response({"error": "Invalid id format. Must be a UUID."}, status=status.HTTP_400_BAD_REQUEST)
+        except Requirement.DoesNotExist:
+            return Response({"error": "Requirement not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        requirement.is_deleted = True
+        requirement.save(update_fields=['is_deleted'])
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class JDAssistantView(APIView):
@@ -980,6 +1032,10 @@ class JDAssistantView(APIView):
 
         # If required fields are missing, try to extract them from jd_text using Gemini
         if (not experience or not technology) and jd_text:
+            # Truncate very long JDs before sending to LLM to reduce latency
+            # Usually the top part of the JD is enough to infer experience/technology
+            jd_snippet = jd_text[:2000]
+
             extract_prompt = f"""
             From the following job description text, extract structured fields.
 
@@ -991,8 +1047,8 @@ class JDAssistantView(APIView):
             - If there are many skills, pick only the top 2-3 most central technologies.
             - Join them in a single short comma-separated string, for example: "Python, AWS".
 
-            JD Text:
-            {jd_text}
+            JD Text (may be truncated):
+            {jd_snippet}
 
             Return ONLY valid JSON in this format:
             {{
@@ -1006,16 +1062,22 @@ class JDAssistantView(APIView):
             """
 
             try:
-                model = genai.GenerativeModel("models/gemini-2.5-flash")
+                model = genai.GenerativeModel("models/gemini-2.5-flash-lite")
                 response = model.generate_content(
                     extract_prompt,
                     generation_config=genai.types.GenerationConfig(
                         temperature=0.1,
+                        max_output_tokens=200,
                         response_mime_type="application/json",
                     ),
                 )
 
-                result_text = getattr(response, "text", None)
+                try:
+                    result_text = response.text  # may raise if no valid Part
+                except Exception as inner_e:
+                    print("JD save response.text access failed:", inner_e)
+                    result_text = None
+
                 if result_text:
                     result_text = result_text.strip()
                     clean_text = re.sub(r"```json|```", "", result_text).strip()
@@ -1031,6 +1093,20 @@ class JDAssistantView(APIView):
             except Exception as e:
                 # If extraction fails, we just proceed with whatever we have
                 print("JD save extraction failed:", e)
+
+        # Simple heuristic fallback if LLM did not provide values
+        if (not experience or not technology) and jd_text:
+            lowered = jd_text.lower()
+            # Try to infer technology from a small set of common stacks
+            tech_map = ["python", "java", "react", "node", ".net", "aws"]
+            if not technology:
+                technology = next((t.title() for t in tech_map if t in lowered), technology)
+
+            # Try to infer experience strings like "4+ years" or "3-5 years"
+            if not experience:
+                match = re.search(r"(\d+\+?\s*-?\s*\d*\s*years?)", jd_text, re.IGNORECASE)
+                if match:
+                    experience = match.group(1).strip()
 
         # After best-effort extraction, still require experience and technology
         if not experience or not technology:

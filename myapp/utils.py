@@ -1,9 +1,12 @@
 import json
 from openai import OpenAI
 from django.conf import settings
-from .models import Candidate, QuestionAnswer
+from .models import Candidate, QuestionAnswer, TECHNOLOGY_CHOICES, DIFFICULTY_CHOICES, USER_CHOICES, INTERVIEW_CHOICES
 import time
 from collections import Counter
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
 
 try:
     from fer.fer import FER
@@ -199,3 +202,16 @@ def analyze_facial_expressions(hr_obj):
     hr_obj.emotion_summary = result_data
     hr_obj.save(update_fields=["emotion_summary"])
     return result_data
+
+
+class EnumsAPIView(APIView):
+    """Common endpoint to get all enums"""
+    
+    def get(self, request):
+        """Return all enum choices"""
+        return Response({
+            'technologies': [{'value': choice[0], 'label': choice[1]} for choice in TECHNOLOGY_CHOICES],
+            'difficulty_levels': [{'value': choice[0], 'label': choice[1]} for choice in DIFFICULTY_CHOICES],
+            'user_roles': [{'value': choice[0], 'label': choice[1]} for choice in USER_CHOICES],
+            'interview_statuses': [{'value': choice[0], 'label': choice[1]} for choice in INTERVIEW_CHOICES]
+        }, status=status.HTTP_200_OK)
