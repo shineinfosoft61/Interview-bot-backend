@@ -1,6 +1,7 @@
 # tasks.py (Celery)
 # celery -A interviewbot worker -l info
 import re
+import os
 from celery import shared_task
 import google.generativeai as genai
 
