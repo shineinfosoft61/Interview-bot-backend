@@ -1,17 +1,12 @@
 # tasks.py (Celery)
 # celery -A interviewbot worker -l info
-from .models import QuestionAnswer, Question
 import re
 from celery import shared_task
-from openai import OpenAI
-from django.conf import settings
 import google.generativeai as genai
-genai.configure(api_key="AIzaSyCkS_laQWhLDMbfLTR94YK50c85AikXk5I")
 
-client = OpenAI(
-                base_url=settings.OPENROUTER_BASE_URL,
-                api_key=settings.OPENROUTER_API_KEY,
-            )
+from .models import QuestionAnswer
+
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
 @shared_task
 def rate_answer(answer_id):
