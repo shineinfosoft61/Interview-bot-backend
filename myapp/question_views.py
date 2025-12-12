@@ -162,6 +162,7 @@ class QuestionListAPIView(APIView):
         # Handle single question creation
         candidate_id = request.data.get('candidate')
         if candidate_id:
+            print('--------------------------')
             try:
                 candidate = Candidate.objects.get(pk=candidate_id)
                 # Use candidate's technology if not provided

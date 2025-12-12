@@ -5,7 +5,7 @@ from .utils import EnumsAPIView
 from .answer_views import AnswerSaveView
 from .candidate_views import CandidateView, PhotoView
 from .requirement_views import RequirementView
-from .chat_views import ChatAiView
+from .llm_views import ChatAiView, AiQuestionView
 from .jd_views import JDAssistantView
 
 urlpatterns = [
@@ -25,5 +25,7 @@ urlpatterns = [
     path('requirement/<uuid:pk>/', RequirementView.as_view(), name='requirement'),
     path('requirement/<uuid:pk>/delete/', RequirementView.as_view(), name='requirement-delete'),
     path('chat/', ChatAiView.as_view(), name="chat"),
+    path('Ai-question/', AiQuestionView.as_view(), name="Ai-question"),
+    path('Ai-question/<uuid:pk>/', AiQuestionView.as_view(), name="Ai-question"),
     path('jd-assistant/<str:action>/', JDAssistantView.as_view(), name="jd-assistant"),
 ]
