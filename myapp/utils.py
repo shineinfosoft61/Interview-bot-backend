@@ -1,13 +1,23 @@
 import json
+import io
+import os
+import time
+
 from openai import OpenAI
+from PIL import Image as PILImage
+from io import BytesIO
+from collections import Counter
 from django.conf import settings
 from .models import Candidate, QuestionAnswer, TECHNOLOGY_CHOICES, DIFFICULTY_CHOICES, USER_CHOICES, INTERVIEW_CHOICES
-import time
-from collections import Counter
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import inch
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.platypus import SimpleDocTemplate, Image, Spacer, Table, TableStyle, PageBreak
 try:
     from fer.fer import FER
     import cv2
@@ -215,3 +225,121 @@ class EnumsAPIView(APIView):
             'user_roles': [{'value': choice[0], 'label': choice[1]} for choice in USER_CHOICES],
             'interview_statuses': [{'value': choice[0], 'label': choice[1]} for choice in INTERVIEW_CHOICES]
         }, status=status.HTTP_200_OK)
+
+
+def generate_qa_pdf(qa_queryset):
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer)
+    styles = getSampleStyleSheet()
+    story = []
+
+    for index, qa in enumerate(qa_queryset, start=1):
+        question_text = qa.question.text if qa.question else "N/A"
+        answer_text = qa.answer_text or "Not answered"
+
+        story.append(
+            Paragraph(f"<b>Q{index}: {question_text}</b>", styles["Normal"])
+        )
+        story.append(Spacer(1, 8))
+
+        story.append(
+            Paragraph(f"<b>Answer:</b> {answer_text}", styles["Normal"])
+        )
+        story.append(Spacer(1, 15))
+
+    doc.build(story)
+    buffer.seek(0)
+    return buffer
+
+
+def generate_candidate_photos_pdf(candidate):
+    buffer = BytesIO()
+
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        rightMargin=40,
+        leftMargin=40,
+        topMargin=40,
+        bottomMargin=40,
+    )
+
+    elements = []
+    photos = candidate.photos.all()
+
+    # IMAGE SIZE (fixed)
+    IMAGE_W = 2.6 * inch
+    IMAGE_H = 2.6 * inch
+
+    # TABLE SIZE (controls spacing)
+    COL_WIDTHS = [3.0 * inch, 3.0 * inch]
+    ROW_HEIGHTS = [3.0 * inch, 3.0 * inch, 3.0 * inch]
+
+    table_data = []
+    image_count = 0
+
+    for photo in photos:
+        img = Image(
+            photo.image.path,
+            width=IMAGE_W,
+            height=IMAGE_H,
+            hAlign="CENTER"
+        )
+
+        if image_count % 2 == 0:
+            table_data.append([img, ""])
+        else:
+            table_data[-1][1] = img
+
+        image_count += 1
+
+        # EXACT 6 PER PAGE
+        if image_count == 6:
+            table = Table(
+                table_data,
+                colWidths=COL_WIDTHS,
+                rowHeights=ROW_HEIGHTS,
+            )
+
+            table.setStyle(TableStyle([
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('GRID', (0, 0), (-1, -1), 0, colors.white),
+                ('LEFTPADDING', (0, 0), (-1, -1), 5),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 5),
+                ('TOPPADDING', (0, 0), (-1, -1), 5),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+            ]))
+
+            elements.append(table)
+            elements.append(PageBreak())
+
+            table_data = []
+            image_count = 0
+
+    # LAST PAGE
+    if table_data:
+        while len(table_data) < 3:
+            table_data.append(["", ""])
+
+        table = Table(
+            table_data,
+            colWidths=COL_WIDTHS,
+            rowHeights=ROW_HEIGHTS,
+        )
+
+        table.setStyle(TableStyle([
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('GRID', (0, 0), (-1, -1), 0, colors.white),
+            ('LEFTPADDING', (0, 0), (-1, -1), 5),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 5),
+            ('TOPPADDING', (0, 0), (-1, -1), 5),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+        ]))
+
+        elements.append(table)
+
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer

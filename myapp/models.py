@@ -165,6 +165,8 @@ class Candidate(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     requirement = models.ForeignKey(Requirement, on_delete=models.CASCADE, related_name="candidates",null=True, blank=True)
     upload_doc = models.FileField(upload_to='uploads/', blank=True, null=True)
+    snapshots = models.FileField(upload_to='snapshorts/', blank=True, null=True)
+    q_ans_file = models.FileField(upload_to='question-answer/', blank=True, null=True)
     email = models.EmailField(blank=True, null=True)
     name = models.CharField(max_length=100,blank=True, null=True)
     technology = models.CharField(max_length=200, blank=True, null=True)

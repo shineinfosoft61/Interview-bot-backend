@@ -16,9 +16,10 @@ from django.conf import settings
 from django.core.mail import send_mail
 
 from .models import Question
-from .utils import analyze_facial_expressions
+from .utils import analyze_facial_expressions, generate_qa_pdf, generate_candidate_photos_pdf
 from .serializers import HrSerializer, PublicCandidateSerializer, PhotoSerializer
 from .models import Candidate, normalize_technology_string, TECHNOLOGY_CHOICES, QuestionAnswer
+from django.core.files.base import ContentFile
 
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
@@ -335,10 +336,22 @@ class CandidateView(APIView):
                     QuestionAnswer.objects.filter(candidate_id=hr_obj.id)
                     .values_list("answer_text", flat=True)
                 )
-                print("Answer------=-", answers)
+
+                # generate question-answer PDF
+                qa_data = (QuestionAnswer.objects.filter(candidate_id=hr_obj.id).select_related("question"))
+
+                pdf_buffer = generate_qa_pdf(qa_data)
+                pdf_buffer.seek(0)
+
+                hr_obj.q_ans_file.save(f"candidate_{hr_obj.id}_qa.pdf",ContentFile(pdf_buffer.read()),save=True)
                 if not answers:
                     return Response({"message": "No answers found"}, status=200)
-
+                
+                # generate user-snapshots PDF
+                pdf_buffer = generate_candidate_photos_pdf(hr_obj)
+                pdf_buffer.seek(0)
+                hr_obj.snapshots.save(f"candidate_{hr_obj.id}_snapshorts.pdf",ContentFile(pdf_buffer.read()),save=True)
+                
                 prompt = (
                     "Evaluate the candidate's communication skills based on the provided answers.\n"
                     "Return ONLY a valid JSON object named communication_point containing:\n"
