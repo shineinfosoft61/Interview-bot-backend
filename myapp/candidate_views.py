@@ -3,6 +3,7 @@ import re
 import docx
 import json
 import time
+import random
 
 import google.generativeai as genai
 
@@ -14,8 +15,9 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.core.exceptions import ValidationError
 from django.conf import settings
 from django.core.mail import send_mail
+from django.db.models import Q
 
-from .models import Question
+from .models import Question, QuestionBank
 from .utils import analyze_facial_expressions, generate_qa_pdf, generate_candidate_photos_pdf
 from .serializers import HrSerializer, PublicCandidateSerializer, PhotoSerializer
 from .models import Candidate, normalize_technology_string, TECHNOLOGY_CHOICES, QuestionAnswer
@@ -300,35 +302,71 @@ class CandidateView(APIView):
                 hr_obj.interview_status = "Scheduled"
                 hr_obj.save(update_fields=["interview_status"])
 
-                # Save serializer data (to ensure gmeet_link etc. are saved)
-                serializer.save()
+                # 4️⃣ Assign questions ONLY if not already assigned
+                questions = Question.objects.filter(candidate=hr_obj)
 
-                # Send email with interview link
-                subject = f"Interview Scheduled - {hr_obj.technology} Role"
-                message = (
-                    f"Hello {hr_obj.name},\n\n"
-                    f"Your interview for the {hr_obj.technology} position has been scheduled.\n\n"
-                    f"🗓 Date & Time: {interview_time.strftime('%A, %d %B %Y at %I:%M %p')}\n"
-                    f"🔗 Google Meet Link: {hr_obj.gmeet_link or 'Not provided'}\n"
-                    f"🔗 Share Link: {hr_obj.shine_link or 'Not provided'}\n"
-                    f"Please make sure to join the interview on time.\n\n"
-                    f"Best regards,\n"
-                    f"HR Team"
-                )
+                if not questions.exists():
+                    technologies = [tech.strip().lower() for tech in hr_obj.technology.split(",")]
+                    qb_questions = QuestionBank.objects.filter(technology__in=technologies)
 
+                    if qb_questions.count() < 9:
+                        return Response({"error": "Not enough questions in Question Bank"},status=status.HTTP_400_BAD_REQUEST)
+
+                    # 1️⃣ First fixed question
+                    fixed_question = Question(candidate=hr_obj,text="Tell me about yourself?", technology="general", order=0, is_default=True)
+
+                    # 2️⃣ Pick 9 random questions
+                    selected_questions = random.sample(list(qb_questions), 9)
+
+                    question_objs = [fixed_question]
+
+                    # 3️⃣ Add remaining questions with correct order
+                    for index, q in enumerate(selected_questions, start=1):
+                        question_objs.append(
+                            Question(
+                                candidate=hr_obj,
+                                text=q.text,
+                                technology=q.technology,
+                                difficulty_level=q.difficulty_level,
+                                time_limit=q.time_limit,
+                                order=index
+                            )
+                        )
+
+                    # 4️⃣ Save all questions at once
+                    Question.objects.bulk_create(question_objs)
+
+                # 5️⃣ Send interview email
                 if hr_obj.email:
+                    subject = f"Interview Scheduled - {hr_obj.technology} Role"
+                    message = (
+                        f"Hello {hr_obj.name},\n\n"
+                        f"Your interview for the {hr_obj.technology} position has been scheduled.\n\n"
+                        f"🗓 Date & Time: {interview_time.strftime('%A, %d %B %Y at %I:%M %p')}\n"
+                        f"🔗 Google Meet Link: {hr_obj.gmeet_link or 'Not provided'}\n"
+                        f"🔗 Share Link: {hr_obj.shine_link or 'Not provided'}\n\n"
+                        f"Best regards,\nHR Team"
+                    )
+
                     try:
                         send_mail(
-                            subject=subject,
-                            message=message,
-                            from_email=settings.DEFAULT_FROM_EMAIL,
-                            recipient_list=[hr_obj.email],
+                            subject,
+                            message,
+                            settings.DEFAULT_FROM_EMAIL,
+                            [hr_obj.email],
                             fail_silently=False,
                         )
                     except Exception as e:
-                        print(f"Email sending failed: {e}")
+                        print("Email failed:", e)
 
-                return Response(serializer.data, status=status.HTTP_200_OK)
+                # 6️⃣ Final success response
+                return Response(
+                    {
+                        "message": "Candidate updated successfully",
+                        "data": serializer.data
+                    },
+                    status=status.HTTP_200_OK
+                )
             if interview_status == "Completed":
                 print("hr_obj:", hr_obj)
                 print("hr_obj.id:", hr_obj.id)

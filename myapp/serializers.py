@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Question, QuestionAnswer, Candidate, Photo, Requirement, User, get_technology_choices, normalize_technology_string
+from .models import Question, QuestionAnswer, Candidate, Photo, Requirement, User, QuestionBank, get_technology_choices, normalize_technology_string
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -208,3 +208,9 @@ class TechnologyChoicesSerializer(serializers.Serializer):
     
     def get_choices(self, obj):
         return get_technology_choices()
+
+
+class QuestionBankSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = QuestionBank
+        fields = "__all__"

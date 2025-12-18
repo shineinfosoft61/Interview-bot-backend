@@ -223,6 +223,22 @@ class Candidate(models.Model):
         return f"{self.name} ({self.email})"
 
 
+class QuestionBank(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    text = models.TextField(null=True, blank=True)
+    technology = models.CharField(max_length=200, null=True, blank=True)
+    difficulty_level = models.CharField(
+        max_length=20, choices=DIFFICULTY_CHOICES, default='medium',null=True, blank=True
+    )
+    time_limit = models.IntegerField(default=120)
+    is_default = models.BooleanField(default=False)
+    is_deleted = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    
+
+
 class Question(models.Model):
     text = models.TextField(null=True, blank=True)
     candidate = models.ForeignKey(Candidate, on_delete=models.CASCADE, related_name="questions",null=True, blank=True)

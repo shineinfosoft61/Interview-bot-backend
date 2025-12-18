@@ -1,14 +1,8 @@
-import json
 import io
-import os
-import time
 
-from openai import OpenAI
-from PIL import Image as PILImage
 from io import BytesIO
 from collections import Counter
-from django.conf import settings
-from .models import Candidate, QuestionAnswer, TECHNOLOGY_CHOICES, DIFFICULTY_CHOICES, USER_CHOICES, INTERVIEW_CHOICES
+from .models import TECHNOLOGY_CHOICES, DIFFICULTY_CHOICES, USER_CHOICES, INTERVIEW_CHOICES
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status

@@ -1,6 +1,6 @@
 from django.urls import path
 from .auth_views import RegisterView, LoginView
-from .question_views import QuestionListAPIView, TechnologyChoicesView
+from .question_views import QuestionListAPIView, TechnologyChoicesView, QuestionBankView
 from .utils import EnumsAPIView
 from .answer_views import AnswerSaveView
 from .candidate_views import CandidateView, PhotoView
@@ -28,4 +28,6 @@ urlpatterns = [
     path('Ai-question/', AiQuestionView.as_view(), name="Ai-question"),
     path('Ai-question/<uuid:pk>/', AiQuestionView.as_view(), name="Ai-question"),
     path('jd-assistant/<str:action>/', JDAssistantView.as_view(), name="jd-assistant"),
+    path("questions-bank/", QuestionBankView.as_view(), name="question-list-create"),
+    path("questions-bank/<uuid:pk>/", QuestionBankView.as_view(), name="question-detail"),
 ]
